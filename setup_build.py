@@ -67,8 +67,18 @@ class h5py_build_ext(build_ext):
         NumPy being present in the main body of the setup script.
     """
 
-    @staticmethod
-    def _make_extensions(config):
+    user_options = [('cython-trace', None,
+                     'Enable cython line trace (for profiling and coverage)')]
+    user_options.extend(build_ext.user_options)
+
+    boolean_options = ['cython-trace']
+    boolean_options.extend(build_ext.boolean_options)
+
+    def initialize_options(self):
+        super().initialize_options()
+        self.cython_trace = False
+
+    def _make_extensions(self, config):
         """ Produce a list of Extension instances which can be passed to
         cythonize().
 
@@ -79,6 +89,10 @@ class h5py_build_ext(build_ext):
         import pkgconfig
 
         settings = COMPILER_SETTINGS.copy()
+
+        if self.cython_trace:
+            settings['define_macros'].extend([('CYTHON_TRACE', 1),
+                                              ('CYTHON_TRACE_NOGIL', 1)])
 
         # Ensure that if a custom HDF5 location is specified, prevent
         # pkg-config and fallback locations from appearing in the settings
@@ -207,9 +221,14 @@ DEF COMPLEX256_SUPPORT = %(complex256_support)s
 
         # Run Cython
         print("Executing cythonize()")
+        if self.cython_trace:
+            extra_kwargs = {'compiler_directives': {'linetrace': True}}
+        else:
+            extra_kwargs = {}
         self.extensions = cythonize(self._make_extensions(config),
                                     force=config.rebuild_required or self.force,
-                                    language_level=3)
+                                    language_level=3,
+                                    **extra_kwargs)
         self.check_rerun_cythonize()
 
         # Perform the build
