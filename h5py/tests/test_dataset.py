@@ -909,15 +909,17 @@ class TestStrings(BaseDataset):
         self.assertEqual(type(out), np.string_)
         self.assertEqual(out, data)
 
-    @ut.expectedFailure
-    def test_unicode_write_error(self):
-        """ Writing a non-utf8 byte string to a unicode vlen dataset raises
-        ValueError """
+    def test_unicode_write_not_utf8_bytes(self):
+        """ Writing a non-utf8 byte string to a unicode vlen dataset is OK
+
+        Reading raises UnicodeDecodeError.
+        """
         dt = h5py.string_dtype()
         ds = self.f.create_dataset('x', (100,), dtype=dt)
-        data = "Hello\xef"
-        with self.assertRaises(ValueError):
-            ds[0] = data
+        data = b"Hello\xef"
+        ds[0] = data
+        with self.assertRaises(UnicodeDecodeError):
+            out = ds[0]
 
     def test_unicode_write_bytes(self):
         """ Writing valid utf-8 byte strings to a unicode vlen dataset is OK
@@ -982,6 +984,15 @@ class TestStrings(BaseDataset):
         out = ds[0]
         self.assertEqual(type(out), bytes)
         self.assertEqual(out, data.encode('ascii'))
+
+    def test_vlen_bytes_write_not_ascii_str(self):
+        """ Writing an utf str to ascii vlen dataset raises UnicodeEncodeError
+        """
+        dt = h5py.string_dtype('ascii')
+        ds = self.f.create_dataset('x', (100,), dtype=dt)
+        data = u"Hello there" + chr(0x2034)
+        with self.assertRaises(UnicodeEncodeError):
+            ds[0] = data
 
 
 class TestCompound(BaseDataset):
