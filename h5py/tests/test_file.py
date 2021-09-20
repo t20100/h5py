@@ -865,6 +865,10 @@ def test_file_locking(tmp_path):
         with h5py.File(fname, mode="r", locking='best-effort') as h5f_read:
             pass
 
+        with pytest.raises(ValueError):
+            with h5py.File(fname, mode="r", locking='unsupported-value') as h5f_read:
+                pass
+
 
 @pytest.mark.skipif(
     h5py.version.hdf5_version_tuple < (1, 12, 1) and (
