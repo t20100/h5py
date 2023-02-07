@@ -583,16 +583,14 @@ cdef class DatasetID(ObjectID):
                     ret = data[:read_chunk_nbytes]  # this copies ?!
             finally:
                 efree(offset)
-                if data and out is None:
+                if out is not None:
+                    PyBuffer_Release(&view)
+                elif data:
                     efree(data)
                 if space_id:
                     H5Sclose(space_id)
-                if out is not None:
-                    PyBuffer_Release(&view)
-            if out is None:
-                return filters, ret
-            else:
-                return filters, read_chunk_nbytes
+
+            return filters, ret if out is None else read_chunk_nbytes
 
     IF HDF5_VERSION >= (1, 10, 5):
 
