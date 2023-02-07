@@ -572,7 +572,7 @@ cdef class DatasetID(ObjectID):
                 else:
                     PyObject_GetBuffer(out, &view, PyBUF_ANY_CONTIGUOUS)
                     if view.len < read_chunk_nbytes:
-                        raise TypeError("out is not large enough (%d, require %d)" % (view.len, read_chunk_nbytes))
+                        raise ValueError("out is not large enough (%d, require %d)" % (view.len, read_chunk_nbytes))
                     data = <char *>view.buf
 
                 IF HDF5_VERSION >= (1, 10, 3):
