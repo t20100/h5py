@@ -516,16 +516,22 @@ cdef class DatasetID(ObjectID):
 
     IF HDF5_VERSION >= (1, 10, 2):
 
-        def read_direct_chunk(self, offsets, PropID dxpl=None):
-            """ (offsets, PropID dxpl=None)
+        def read_direct_chunk(self, offsets, buffer=None, PropID dxpl=None):
+            """ (offsets, buffer=None, PropID dxpl=None)
 
-            Reads data to a bytes array directly from a chunk at position
+            Reads data to a bytes array or buffer directly from a chunk at position
             specified by the `offsets` argument and bypasses any filters HDF5
             would normally apply to the written data. However, the written data
-            may be compressed or not.
+            may be compressed or not. If provided, the buffer argument should
+            support the python buffer interface.
 
-            Returns a tuple containing the `filter_mask` and the bytes data
-            which are the raw data storing this chuck.
+            if no buffer is provided (buffer=None):
+              Returns a tuple containing the `filter_mask` and the bytes data
+              which are the raw data storing this chunk.
+
+            if a destination buffer is provided:
+              Returns a tuple containing the `filter_mask` number of bytes
+              read into the buffer argument.
 
             `filter_mask` is a bit field of up to 32 values. It records which
             filters have been applied to this chunk, of the filter pipeline
@@ -547,6 +553,7 @@ cdef class DatasetID(ObjectID):
             cdef hsize_t read_chunk_nbytes
             cdef char *data = NULL
             cdef bytes ret
+            cdef Py_buffer view
 
             dset_id = self.id
             dxpl_id = pdefault(dxpl)
@@ -560,21 +567,32 @@ cdef class DatasetID(ObjectID):
                 offset = <hsize_t*>emalloc(sizeof(hsize_t)*rank)
                 convert_tuple(offsets, offset, rank)
                 H5Dget_chunk_storage_size(dset_id, offset, &read_chunk_nbytes)
-                data = <char *>emalloc(read_chunk_nbytes)
+                if buffer is None:
+                    data = <char *>emalloc(read_chunk_nbytes)
+                else:
+                    PyObject_GetBuffer(buffer, &view, PyBUF_ANY_CONTIGUOUS)
+                    if view.len < read_chunk_nbytes:
+                        raise TypeError("buffer is not large enough (%d, require %d)" % (view.len, read_chunk_nbytes))
+                    data = <char *>view.buf
 
                 IF HDF5_VERSION >= (1, 10, 3):
                     H5Dread_chunk(dset_id, dxpl_id, offset, &filters, data)
                 ELSE:
                     H5DOread_chunk(dset_id, dxpl_id, offset, &filters, data)
-                ret = data[:read_chunk_nbytes]
+                if buffer is None:
+                    ret = data[:read_chunk_nbytes]  # this copies ?!
             finally:
                 efree(offset)
-                if data:
+                if data and buffer is None:
                     efree(data)
                 if space_id:
                     H5Sclose(space_id)
-
-            return filters, ret
+                if buffer is not None:
+                    PyBuffer_Release(&view)
+            if buffer is None:
+                return filters, ret
+            else:
+                return filters, read_chunk_nbytes
 
     IF HDF5_VERSION >= (1, 10, 5):
 
