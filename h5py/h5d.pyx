@@ -32,6 +32,9 @@ from cpython cimport PyObject_GetBuffer, \
                      PyBuffer_Release
 
 
+# Python imports
+import numpy as np
+
 # Initialization
 import_array()
 
@@ -535,8 +538,9 @@ cdef class DatasetID(ObjectID):
               which are the raw data storing this chunk.
 
             if an output buffer is provided:
-              Returns a tuple containing the `filter_mask` and a memoryview on
-              the used area of the output buffer.
+              Returns a tuple containing the `filter_mask` and a numpy array
+              of the read raw data. This array shares the memory of the out
+              argument buffer.
 
             `filter_mask` is a bit field of up to 32 values. It records which
             filters have been applied to this chunk, of the filter pipeline
@@ -595,7 +599,7 @@ cdef class DatasetID(ObjectID):
                 if space_id:
                     H5Sclose(space_id)
 
-            return filters, ret if out is None else out[:read_chunk_nbytes]
+            return filters, ret if out is None else np.asarray(out[:read_chunk_nbytes])
 
     IF HDF5_VERSION >= (1, 10, 5):
 
