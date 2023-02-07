@@ -28,6 +28,7 @@ from ._proxy cimport dset_rw
 from ._objects import phil, with_phil
 from cpython cimport PyObject_GetBuffer, \
                      PyBUF_ANY_CONTIGUOUS, \
+                     PyBUF_WRITABLE, \
                      PyBuffer_Release
 
 
@@ -570,7 +571,7 @@ cdef class DatasetID(ObjectID):
                 if out is None:
                     data = <char *>emalloc(read_chunk_nbytes)
                 else:
-                    PyObject_GetBuffer(out, &view, PyBUF_ANY_CONTIGUOUS)
+                    PyObject_GetBuffer(out, &view, PyBUF_ANY_CONTIGUOUS | PyBUF_WRITABLE)
                     if view.len < read_chunk_nbytes:
                         raise ValueError("out is not large enough (%d, require %d)" % (view.len, read_chunk_nbytes))
                     data = <char *>view.buf
