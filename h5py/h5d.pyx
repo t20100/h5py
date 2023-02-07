@@ -35,6 +35,10 @@ from cpython cimport PyObject_GetBuffer, \
 # Initialization
 import_array()
 
+ctypedef fused any_char_type:
+    unsigned char
+    signed char
+
 # === Public constants and data structures ====================================
 
 COMPACT     = H5D_COMPACT
@@ -517,7 +521,7 @@ cdef class DatasetID(ObjectID):
 
     IF HDF5_VERSION >= (1, 10, 2):
 
-        def read_direct_chunk(self, offsets, PropID dxpl=None, out=None):
+        def read_direct_chunk(self, offsets, PropID dxpl=None, any_char_type[::1] out=None):
             """ (offsets, PropID dxpl=None, out=None)
 
             Reads data to a bytes array or into output buffer directly from a
@@ -531,8 +535,8 @@ cdef class DatasetID(ObjectID):
               which are the raw data storing this chunk.
 
             if an output buffer is provided:
-              Returns a tuple containing the `filter_mask` number of bytes
-              read into the buffer argument.
+              Returns a tuple containing the `filter_mask` and a memoryview on
+              the used area of the output buffer.
 
             `filter_mask` is a bit field of up to 32 values. It records which
             filters have been applied to this chunk, of the filter pipeline
@@ -591,7 +595,7 @@ cdef class DatasetID(ObjectID):
                 if space_id:
                     H5Sclose(space_id)
 
-            return filters, ret if out is None else read_chunk_nbytes
+            return filters, ret if out is None else out[:read_chunk_nbytes]
 
     IF HDF5_VERSION >= (1, 10, 5):
 
