@@ -16,6 +16,7 @@ include "config.pxi"
 # Compile-time imports
 
 from collections import namedtuple
+import functools
 cimport cython
 from ._objects cimport pdefault
 from numpy cimport ndarray, import_array, PyArray_DATA
@@ -28,6 +29,7 @@ from ._proxy cimport dset_rw
 
 from ._objects import phil, with_phil
 from cpython cimport PyBUF_ANY_CONTIGUOUS, \
+                     PyBUF_WRITABLE, \
                      PyBuffer_Release, \
                      PyBytes_AsString, \
                      PyBytes_FromStringAndSize, \
@@ -154,8 +156,47 @@ def open(ObjectID loc not None, char* name, PropID dapl=None):
     """
     return DatasetID(H5Dopen(loc.id, name, pdefault(dapl)))
 
-# --- Proxy functions for safe(r) threading -----------------------------------
 
+cdef class ChunkViewWrapper:
+    """Wrapper of read chunk buffer view.
+
+    This object keeps a reference to the underlying memory buffer.
+    """
+    cdef Py_buffer view
+    cdef int nbytes
+
+    def __cinit__(self, buffer, int nbytes):
+        # Set nbytes: __dealloc__ uses it and is called even if __cinit__ fails
+        self.nbytes = 0
+
+        if nbytes <= 0:
+            raise ValueError("nbytes must be strictly positive")
+        PyObject_GetBuffer(buffer, &self.view, PyBUF_ANY_CONTIGUOUS | PyBUF_WRITABLE)
+        self.nbytes = nbytes
+        if self.view.len < nbytes:
+            raise ValueError(
+                f"out buffer is only {self.view.len} bytes, {nbytes} bytes required"
+            )
+
+    def __dealloc__(self):
+        if self.nbytes > 0:
+            PyBuffer_Release(&self.view)
+
+    @functools.lru_cache()
+    def __tobytes(self):
+        """Returns the chunk data in the buffer as a byte string."""
+        if self.nbytes <= 0:
+            return b''
+        return PyBytes_FromStringAndSize(<char *>self.view.buf, self.nbytes)
+
+    def __len__(self):
+        return self.nbytes
+
+    def __getitem__(self, index):
+        return self.__tobytes()[index]
+
+
+# --- Proxy functions for safe(r) threading -----------------------------------
 
 cdef class DatasetID(ObjectID):
 
@@ -521,6 +562,106 @@ cdef class DatasetID(ObjectID):
 
     IF HDF5_VERSION >= (1, 10, 2):
 
+        def read_direct_chunk_tobuffer(self, offsets, out, PropID dxpl=None):
+            cdef hid_t dset_id
+            cdef hid_t dxpl_id
+            cdef hid_t space_id
+            cdef hsize_t *offset = NULL
+            cdef int rank
+            cdef uint32_t filters
+            cdef hsize_t chunk_bytes
+            cdef Py_buffer view
+            cdef int nb_offsets = len(offsets)
+
+            dset_id = self.id
+            dxpl_id = pdefault(dxpl)
+            space_id = H5Dget_space(dset_id)
+            if space_id == -1:  # H5I_INVALID_HID
+                raise RuntimeError("Cannot retrieve dataset space")
+            rank = H5Sget_simple_extent_ndims(space_id)
+            H5Sclose(space_id)
+
+            if nb_offsets != rank:
+                raise ValueError(
+                    f"offsets length ({nb_offsets}) must match dataset rank ({rank})"
+                )
+
+            PyObject_GetBuffer(out, &view, PyBUF_ANY_CONTIGUOUS | PyBUF_WRITABLE)
+            try:
+                offset = <hsize_t*> PyMem_Malloc(sizeof(hsize_t)*rank)
+                if not offset:
+                    raise MemoryError()
+                convert_tuple(offsets, offset, rank)
+                H5Dget_chunk_storage_size(dset_id, offset, &chunk_bytes)
+
+                if <hsize_t>view.len < chunk_bytes:
+                    raise ValueError(
+                        f"out buffer is not large enough: {view.len} bytes, requires {chunk_bytes} bytes"
+                    )
+
+                IF HDF5_VERSION >= (1, 10, 3):
+                    H5Dread_chunk(dset_id, dxpl_id, offset, &filters, <char *>view.buf)
+                ELSE:
+                    H5DOread_chunk(dset_id, dxpl_id, offset, &filters, <char *>view.buf)
+            finally:
+                if offset:
+                    PyMem_Free(offset)
+                PyBuffer_Release(&view)
+
+            return filters, chunk_bytes
+
+        @cython.boundscheck(False)
+        @cython.wraparound(False)
+        def read_direct_chunk_wrapper(self, offsets, PropID dxpl=None, out=None):
+            cdef hid_t dset_id
+            cdef hid_t dxpl_id
+            cdef hid_t space_id
+            cdef hsize_t *offset = NULL
+            cdef int rank
+            cdef uint32_t filters
+            cdef hsize_t chunk_bytes, out_bytes
+            cdef ChunkViewWrapper wrapper
+            cdef int nb_offsets = len(offsets)
+            cdef void * chunk_buffer
+
+            dset_id = self.id
+            dxpl_id = pdefault(dxpl)
+            space_id = H5Dget_space(dset_id)
+            if space_id == -1:  # H5I_INVALID_HID
+                raise RuntimeError("Cannot retrieve dataset space")
+            rank = H5Sget_simple_extent_ndims(space_id)
+            H5Sclose(space_id)
+
+            if nb_offsets != rank:
+                raise ValueError(
+                    f"offsets length ({nb_offsets}) must match dataset rank ({rank})"
+                )
+
+            offset = <hsize_t*> PyMem_Malloc(sizeof(hsize_t)*rank)
+            if not offset:
+                raise MemoryError()
+
+            try:
+                convert_tuple(offsets, offset, rank)
+                H5Dget_chunk_storage_size(dset_id, offset, &chunk_bytes)
+
+                if out is None:
+                    retval = PyBytes_FromStringAndSize(NULL, chunk_bytes)
+                    chunk_buffer = PyBytes_AsString(retval)
+                else:
+                    wrapper = ChunkViewWrapper(out, chunk_bytes)
+                    retval = wrapper
+                    chunk_buffer = wrapper.view.buf
+
+                IF HDF5_VERSION >= (1, 10, 3):
+                    H5Dread_chunk(dset_id, dxpl_id, offset, &filters, chunk_buffer)
+                ELSE:
+                    H5DOread_chunk(dset_id, dxpl_id, offset, &filters, chunk_buffer)
+            finally:
+                PyMem_Free(offset)
+
+            return filters, retval
+
         @cython.boundscheck(False)
         @cython.wraparound(False)
         def read_direct_chunk(self, offsets, PropID dxpl=None, unsigned char[::1] out=None):
@@ -588,7 +729,7 @@ cdef class DatasetID(ObjectID):
                         raise ValueError(
                             f"out buffer is only {out_bytes} bytes, {chunk_bytes} bytes required"
                         )
-                    retval = out[:chunk_bytes]
+                    retval = memoryview(out[:chunk_bytes])
                     chunk_buffer = &out[0]
 
                 IF HDF5_VERSION >= (1, 10, 3):
