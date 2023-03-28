@@ -17,6 +17,7 @@ include "config.pxi"
 
 from collections import namedtuple
 import functools
+import numbers
 cimport cython
 from ._objects cimport pdefault
 from numpy cimport ndarray, import_array, PyArray_DATA
@@ -169,8 +170,11 @@ cdef class ChunkViewWrapper:
         # Set nbytes: __dealloc__ uses it and is called even if __cinit__ fails
         self.nbytes = 0
 
-        if nbytes <= 0:
+        if nbytes < 0:
             raise ValueError("nbytes must be strictly positive")
+        if nbytes == 0:
+            return
+
         PyObject_GetBuffer(buffer, &self.view, PyBUF_ANY_CONTIGUOUS | PyBUF_WRITABLE)
         self.nbytes = nbytes
         if self.view.len < nbytes:
@@ -194,6 +198,66 @@ cdef class ChunkViewWrapper:
 
     def __getitem__(self, index):
         return self.__tobytes()[index]
+
+
+cdef class ReadChunkInfo:
+    """Description of read chunk"""
+    cdef bint is_buffer
+    cdef Py_buffer buffer_view
+    cdef bytes bytes_buffer
+    cdef void * buffer_pointer
+
+    cdef readonly int nbytes
+    cdef readonly uint32_t filters
+
+    def __cinit__(self, buffer, int nbytes):
+        # Set is_buffer early: __dealloc__ uses it and is called even if __cinit__ fails
+        self.is_buffer = False
+        self.nbytes = max(nbytes, 0)
+        self.filters = 0
+
+        if buffer is None or nbytes == 0:
+            self.bytes_buffer = PyBytes_FromStringAndSize(NULL, self.nbytes)
+            self.buffer_pointer = PyBytes_AsString(self.bytes_buffer)
+        else:
+            PyObject_GetBuffer(buffer, &self.buffer_view, PyBUF_ANY_CONTIGUOUS | PyBUF_WRITABLE)
+            self.is_buffer = True
+            if self.buffer_view.len < self.nbytes:
+                raise ValueError(
+                    f"out buffer is only {self.buffer_view.len} bytes, {nbytes} bytes required"
+                )
+            self.bytes_buffer = b''
+            self.buffer_pointer = self.buffer_view.buf
+
+    def __dealloc__(self):
+        if self.is_buffer:
+            PyBuffer_Release(&self.buffer_view)
+
+    @property
+    def data(self):
+        """Returns the chunk data as a byte string."""
+        if self.is_buffer and not self.bytes_buffer:
+            # Read from buffer and cache
+            self.bytes_buffer = PyBytes_FromStringAndSize(<char *>self.buffer_view.buf, self.nbytes)
+        return self.bytes_buffer
+
+    # Backward compatibility with 2-tuple (filters, chunk bytes)
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, index):
+        if isinstance(index, numbers.Integral):
+            if index == 0:
+                return self.filters
+            if index == 1:
+                return self.data
+            raise IndexError("index out of range")
+
+        if not isinstance(index, slice):
+            raise TypeError(f"indices must be integers or slices, not {type(index)}")
+
+        return tuple(self[i] for i in range(*index.indices(len(self))))
 
 
 # --- Proxy functions for safe(r) threading -----------------------------------
@@ -661,6 +725,58 @@ cdef class DatasetID(ObjectID):
                 PyMem_Free(offset)
 
             return filters, retval
+
+        @cython.boundscheck(False)
+        @cython.wraparound(False)
+        def read_direct_chunk_info(self, offsets, PropID dxpl=None, out=None):
+            cdef hid_t dset_id
+            cdef hid_t dxpl_id
+            cdef hid_t space_id
+            cdef hsize_t *offset = NULL
+            cdef int rank
+            cdef uint32_t filters
+            cdef hsize_t chunk_bytes, out_bytes
+            cdef ReadChunkInfo retval
+            cdef int nb_offsets = len(offsets)
+
+            dset_id = self.id
+            dxpl_id = pdefault(dxpl)
+            space_id = H5Dget_space(dset_id)
+            if space_id == -1:  # H5I_INVALID_HID
+                raise RuntimeError("Cannot retrieve dataset space")
+            rank = H5Sget_simple_extent_ndims(space_id)
+            H5Sclose(space_id)
+
+            if nb_offsets != rank:
+                raise ValueError(
+                    f"offsets length ({nb_offsets}) must match dataset rank ({rank})"
+                )
+
+            offset = <hsize_t*> PyMem_Malloc(sizeof(hsize_t)*rank)
+            if not offset:
+                raise MemoryError()
+
+            try:
+                convert_tuple(offsets, offset, rank)
+                H5Dget_chunk_storage_size(dset_id, offset, &chunk_bytes)
+
+                #if out is None:
+                #    retval = ReadChunkInfo.from_bytes(
+                #        PyBytes_FromStringAndSize(NULL, chunk_bytes),
+                #        chunk_bytes,
+                #    )
+                #else:
+                #    retval = ReadChunkInfo.from_buffer(out, chunk_bytes)
+                retval = ReadChunkInfo(out, chunk_bytes)
+
+                IF HDF5_VERSION >= (1, 10, 3):
+                    H5Dread_chunk(dset_id, dxpl_id, offset, &retval.filters, retval.buffer_pointer)
+                ELSE:
+                    H5DOread_chunk(dset_id, dxpl_id, offset, &retval.filters, retval.buffer_pointer)
+            finally:
+                PyMem_Free(offset)
+
+            return retval
 
         @cython.boundscheck(False)
         @cython.wraparound(False)
