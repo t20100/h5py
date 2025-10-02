@@ -34,6 +34,7 @@ class Group(HLObject, MutableMappingHDF5):
     def __init__(self, bind):
         """ Create a new Group object by binding to a low-level GroupID.
         """
+        self._lapl = None
         with phil:
             if not isinstance(bind, h5g.GroupID):
                 raise ValueError("%s is not a GroupID" % bind)

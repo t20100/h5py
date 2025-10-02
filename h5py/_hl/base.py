@@ -129,18 +129,12 @@ def array_for_new_object(data, specified_dtype=None):
     return data
 
 
-def default_lapl():
-    """ Default link access property list """
-    return None
-
-
 def default_lcpl():
     """ Default link creation property list """
     lcpl = h5p.create(h5p.LINK_CREATE)
     lcpl.set_create_intermediate_group(True)
     return lcpl
 
-dlapl = default_lapl()
 dlcpl = default_lcpl()
 
 
@@ -160,12 +154,6 @@ class CommonStateObject:
 
         Also implements Unicode operations.
     """
-
-    @property
-    def _lapl(self):
-        """ Fetch the link access property list appropriate for this object
-        """
-        return dlapl
 
     @property
     def _lcpl(self):
