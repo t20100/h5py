@@ -31,10 +31,10 @@ class Group(HLObject, MutableMappingHDF5):
     """ Represents an HDF5 group.
     """
 
-    def __init__(self, bind):
+    def __init__(self, bind, lapl: h5p.PropLAID | None = None):
         """ Create a new Group object by binding to a low-level GroupID.
         """
-        self._lapl = None
+        self._lapl = None if lapl is None else lapl.copy()
         with phil:
             if not isinstance(bind, h5g.GroupID):
                 raise ValueError("%s is not a GroupID" % bind)
@@ -70,7 +70,7 @@ class Group(HLObject, MutableMappingHDF5):
             else:
                 raise TypeError("track_times must be either True, False, or None")
             gid = h5g.create(self.id, name, lcpl=lcpl, gcpl=gcpl)
-            return Group(gid)
+            return Group(gid, self._lapl)
 
     def create_dataset(self, name, shape=None, dtype=None, data=None, **kwds):
         """ Create a new HDF5 dataset
@@ -372,7 +372,7 @@ class Group(HLObject, MutableMappingHDF5):
 
         otype = h5i.get_type(oid)
         if otype == h5i.GROUP:
-            return Group(oid)
+            return Group(oid, self._lapl)
         elif otype == h5i.DATASET:
             return dataset.Dataset(oid, readonly=(self.file.mode == 'r'))
         elif otype == h5i.DATATYPE:
@@ -754,6 +754,16 @@ class Group(HLObject, MutableMappingHDF5):
             r = '<HDF5 group %s (%d members)>' % (namestr, len(self))
 
         return r
+
+
+    @property
+    def link_access(self) -> h5p.PropLAID | None:
+        """Link access property list: Soft & external links access behavior"""
+        return self._lapl
+
+    @link_access.setter
+    def link_access(self, lapl: h5p.PropLAID | None):
+        self._lapl = lapl
 
 
 class HardLink:
