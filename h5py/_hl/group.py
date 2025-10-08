@@ -12,6 +12,7 @@
 """
 
 from contextlib import contextmanager
+from copy import copy
 import posixpath as pp
 import numpy
 
@@ -23,6 +24,7 @@ from . import base
 from .base import HLObject, MutableMappingHDF5, phil, with_phil
 from . import dataset
 from . import datatype
+from .properties import LinkAccess
 from .vds import vds_support
 
 
@@ -31,10 +33,11 @@ class Group(HLObject, MutableMappingHDF5):
     """ Represents an HDF5 group.
     """
 
-    def __init__(self, bind, lapl: h5p.PropLAID | None = None):
+    def __init__(self, bind, link_access: LinkAccess | None = None):
         """ Create a new Group object by binding to a low-level GroupID.
         """
-        self._lapl = None if lapl is None else lapl.copy()
+
+        self._link_access = LinkAccess() if link_access is None else copy(link_access)
         with phil:
             if not isinstance(bind, h5g.GroupID):
                 raise ValueError("%s is not a GroupID" % bind)
@@ -70,7 +73,7 @@ class Group(HLObject, MutableMappingHDF5):
             else:
                 raise TypeError("track_times must be either True, False, or None")
             gid = h5g.create(self.id, name, lcpl=lcpl, gcpl=gcpl)
-            return Group(gid, self._lapl)
+            return Group(gid, self.link_access)
 
     def create_dataset(self, name, shape=None, dtype=None, data=None, **kwds):
         """ Create a new HDF5 dataset
@@ -372,7 +375,7 @@ class Group(HLObject, MutableMappingHDF5):
 
         otype = h5i.get_type(oid)
         if otype == h5i.GROUP:
-            return Group(oid, self._lapl)
+            return Group(oid, self.link_access)
         elif otype == h5i.DATASET:
             return dataset.Dataset(oid, readonly=(self.file.mode == 'r'))
         elif otype == h5i.DATATYPE:
@@ -755,15 +758,14 @@ class Group(HLObject, MutableMappingHDF5):
 
         return r
 
+    @property
+    def _lapl(self) -> h5p.PropLAID | None:
+        return self.link_access._to_lapl(self.file)
 
     @property
-    def link_access(self) -> h5p.PropLAID | None:
-        """Link access property list: Soft & external links access behavior"""
-        return self._lapl
-
-    @link_access.setter
-    def link_access(self, lapl: h5p.PropLAID | None):
-        self._lapl = lapl
+    def link_access(self) -> LinkAccess:
+        """Link access properties: Soft & external links access behavior"""
+        return self._link_access
 
 
 class HardLink:
