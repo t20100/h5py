@@ -24,7 +24,7 @@ from tempfile import mkdtemp
 
 from collections.abc import MutableMapping
 
-from .common import ut, TestCase
+from h5py.tests.common import ut, TestCase
 import h5py
 from h5py import File, Group, SoftLink, HardLink, ExternalLink
 from h5py import Dataset, Datatype
@@ -956,6 +956,24 @@ class TestExternalLinks(TestCase):
             ext_file["α"].attrs["ext_attr"] = "test"
         self.f['ext'] = ExternalLink(ext_filename, '/α')
         self.assertEqual(self.f["ext"].attrs["ext_attr"], "test")
+
+    def test_get_elink_mode(self):
+        """Check that external links files are opened with custom access mode"""
+        main_filename = os.path.join(mkdtemp(), "external.hdf5")
+
+        with File(main_filename, "w") as main_file:
+            main_file["ext"] = ExternalLink(self.ename, "/external")
+
+            ext_group = main_file.get("ext", elink_mode="r")
+            self.assertEqual(ext_group.file.mode, "r")
+            with self.assertRaises(ValueError):
+                ext_group['data'] = 1
+ 
+        with File(main_filename, "r") as main_file:
+            print(main_file.swmr_mode)
+            ext_group = main_file.get("ext", elink_mode="r+")
+            self.assertEqual(ext_group.file.mode, "r+")
+
 
 class TestExtLinkBugs(TestCase):
 
